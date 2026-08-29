@@ -7,8 +7,8 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local ENV = getgenv and getgenv() or _G
 
-local userId = ENV.a9d6ac92-2c74-4869-9f17-ef2de9f67b8e
-local secretKey = ENV.SFsVWsBP1zFPG0ckiBwmBQEzOAT1lZJf8G9z9nBViLAqYxSmyIgI
+local userId = a9d6ac92-2c74-4869-9f17-ef2de9f67b8e
+local secretKey = SFsVWsBP1zFPG0ckiBwmBQEzOAT1lZJf8G9z9nBViLAqYxSmyIgI
 
 if not userId or not secretKey then
     warn("[AUTOHOP] Missing BSS_USER_ID or BSS_SECRET_KEY")
