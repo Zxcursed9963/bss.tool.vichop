@@ -1,3 +1,8 @@
+getgenv().BSS_USER_ID = "a9d6ac92-2c74-4869-9f17-ef2de9f67b8e"
+getgenv().BSS_SECRET_KEY = "SFsVWsBP1zFPG0ckiBwmBQEzOAT1lZJf8G9z9nBViLAqYxSmyIgI"
+
+
+
 local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
 local Players = game:GetService("Players")
@@ -7,8 +12,8 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local ENV = getgenv and getgenv() or _G
 
-local userId = a9d6ac92-2c74-4869-9f17-ef2de9f67b8e
-local secretKey = SFsVWsBP1zFPG0ckiBwmBQEzOAT1lZJf8G9z9nBViLAqYxSmyIgI
+local userId = ENV.BSS_USER_ID
+local secretKey = ENV.BSS_SECRET_KEY
 
 if not userId or not secretKey then
     warn("[AUTOHOP] Missing BSS_USER_ID or BSS_SECRET_KEY")
