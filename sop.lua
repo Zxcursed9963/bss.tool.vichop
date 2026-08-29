@@ -1,25 +1,5 @@
-local function decodeBase64(str)
-    local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-    str = string.gsub(str, '[^'..b..'=]', '')
-    return (str:gsub('.', function(x)
-        if x == '=' then return '' end
-        local r, a = '', b:find(x)-1
-        for i=6,1,-1 do r = r .. (a%2^i - a%2^(i-1) > 0 and '1' or '0') end
-        return r
-    end):gsub('%d%d%d?%d?%d?%d?%d?%d?', function(x)
-        if #x < 8 then return '' end
-        local c = 0
-        for i=1,8 do c = c + (x:sub(i,i) == '1' and 2^(8-i) or 0) end
-        return string.char(c)
-    end))
-end
-
-
-local encodedId = "kzivg;<߽^y{"
-local encodedKey = "H[ZO1OG$&38_ospU*cȈ"
-
-getgenv().BSS_USER_ID = decodeBase64(encodedId)
-getgenv().BSS_SECRET_KEY = decodeBase64(encodedKey)
+getgenv().BSS_USER_ID = "a9d6ac92-2c74-4869-9f17-ef2de9f67b8e"
+getgenv().BSS_SECRET_KEY = "SFsVWsBP1zFPG0ckiBwmBQEzOAT1lZJf8G9z9nBViLAqYxSmyIgI"
 local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
 local Players = game:GetService("Players")
