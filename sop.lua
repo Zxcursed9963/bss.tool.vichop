@@ -1,5 +1,3 @@
-
-
 local function decodeBase64(str)
     local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
     str = string.gsub(str, '[^'..b..'=]', '')
@@ -15,9 +13,12 @@ local function decodeBase64(str)
         return string.char(c)
     end))
 end
-local encodedKey = "U0ZzVldzQlAxekZQRzBja2lCd21CUUV6T0FUMWxaSmY4Rzl6OW5CVmlMQXFZeFNteUlnSQ=="
 
-getgenv().BSS_USER_ID = "a9d6ac92-2c74-4869-9f17-ef2de9f67b8e"
+
+local encodedId = "YTlkNmFjOTItMmM3NC00ODY5LTlmMTctZWYyZGU5ZjY3Yjhl"
+local encodedKey = "U0ZzVldzQlAxekZQRzBja2lCd21CUUVPek9BVDFsWkpmOEc5ejluQlZpTEFxWXhTbXlJZ0k="
+
+getgenv().BSS_USER_ID = decodeBase64(encodedId)
 getgenv().BSS_SECRET_KEY = decodeBase64(encodedKey)
 local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
