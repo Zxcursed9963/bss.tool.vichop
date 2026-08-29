@@ -15,8 +15,8 @@ local function decodeBase64(str)
 end
 
 
-local encodedId = "YTlkNmFjOTItMmM3NC00ODY5LTlmMTctZWYyZGU5ZjY3Yjhl"
-local encodedKey = "U0ZzVldzQlAxekZQRzBja2lCd21CUUVPek9BVDFsWkpmOEc5ejluQlZpTEFxWXhTbXlJZ0k="
+local encodedId = "kzivg;<߽^y{"
+local encodedKey = "H[ZO1OG$&38_ospU*cȈ"
 
 getgenv().BSS_USER_ID = decodeBase64(encodedId)
 getgenv().BSS_SECRET_KEY = decodeBase64(encodedKey)
