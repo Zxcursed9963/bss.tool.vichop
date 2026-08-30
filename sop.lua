@@ -1,5 +1,4 @@
-getgenv().BSS_USER_ID = "a9d6ac92-2c74-4869-9f17-ef2de9f67b8e"
-getgenv().BSS_SECRET_KEY = "SFsVWsBP1zFPG0ckiBwmBQEzOAT1lZJf8G9z9nBViLAqYxSmyIgI"
+
 local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
 local Players = game:GetService("Players")
