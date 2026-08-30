@@ -1,41 +1,63 @@
-# Compiled Lua sources
-luac.out
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local HttpService = game:GetService("HttpService")
 
-# luarocks build files
-*.src.rock
-*.zip
-*.tar.gz
+local function postJson(url, data)
+    local body = HttpService:JSONEncode(data)
+    -- Пробуем доступные методы в порядке приоритета
+    if syn and syn.request then
+        local resp = syn.request({
+            Url = url,
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = body
+        })
+        return resp.Body
+    elseif http and http.request then
+        local resp = http.request({
+            Url = url,
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = body
+        })
+        return resp.Body
+    elseif request then
+        local resp = request({
+            Url = url,
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = body
+        })
+        return resp.Body
+    else
+        -- fallback (может не работать, но попробуем)
+        return game:HttpGet(url, true, body)
+    end
+end
 
-# Object files
-*.o
-*.os
-*.ko
-*.obj
-*.elf
 
-# Precompiled Headers
-*.gch
-*.pch
+local rawResponse = postJson("https://lll.bonto.run/get-keys", { robloxUserId = tostring(LocalPlayer.UserId) })
+local keys = HttpService:JSONDecode(rawResponse)
 
-# Libraries
-*.lib
-*.a
-*.la
-*.lo
-*.def
-*.exp
+if keys.error then
+    warn("Ошибка от сервера: " .. keys.error)
+    return
+end
 
-# Shared objects (inc. Windows DLLs)
-*.dll
-*.so
-*.so.*
-*.dylib
 
-# Executables
-*.exe
-*.out
-*.app
-*.i*86
-*.x86_64
-*.hex
+getgenv().AUTH = {
+    UserId = keys.userId,
+    SecretKey = keys.secretKey
+}
 
+
+getgenv().CONFIG = CONFIG or {
+    Vicious = {
+        Regular = 1,
+        Gifted = 2,
+    },
+}
+getgenv().DELAY = DELAY or 3
+
+-- Загружаем основной скрипт
+loadstring(game:HttpGet("https://api.luarmor.net/files/v4/loaders/fcb6fb4f6df97eadd4957d70a4481c8c.lua"))()
