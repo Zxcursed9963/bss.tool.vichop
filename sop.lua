@@ -8,18 +8,68 @@ local UserInputService = game:GetService("UserInputService")
 local LocalPlayer = Players.LocalPlayer
 local ENV = getgenv and getgenv() or _G
 
-local userId = ENV.BSS_USER_ID
-local secretKey = ENV.BSS_SECRET_KEY
-
-if not userId or not secretKey then
-    warn("[AUTOHOP] Missing BSS_USER_ID or BSS_SECRET_KEY")
-    return
+local function httpRequest(options)
+    if syn and syn.request then
+        return syn.request(options)
+    elseif http and http.request then
+        return http.request(options)
+    elseif typeof(request) == "function" then
+        return request(options)
+    end
+    return nil
 end
 
-if typeof(request) ~= "function" then
+if not (syn and syn.request) and not (http and http.request) and typeof(request) ~= "function" then
     warn("[AUTOHOP] request(...) is not available in this executor")
     return
 end
+
+local function fetchKeys()
+    local ok, res = pcall(function()
+        return httpRequest({
+            Url = "https://lll.bonto.run/get-keys",
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = HttpService:JSONEncode({
+                robloxUserId = tostring(LocalPlayer.UserId)
+            })
+        })
+    end)
+
+    if not ok or not res or not res.Body then
+        warn("[AUTOHOP] Key server request failed")
+        return nil
+    end
+
+    local okDecode, data = pcall(function()
+        return HttpService:JSONDecode(res.Body)
+    end)
+
+    if not okDecode or not data then
+        warn("[AUTOHOP] Key server returned invalid JSON")
+        return nil
+    end
+
+    if data.error then
+        warn("[AUTOHOP] Key server error: " .. tostring(data.error))
+        return nil
+    end
+
+    if not data.userId or not data.secretKey then
+        warn("[AUTOHOP] Key server response missing userId/secretKey")
+        return nil
+    end
+
+    return data
+end
+
+local keys = fetchKeys()
+if not keys then
+    return
+end
+
+local userId = keys.userId
+local secretKey = keys.secretKey
 
 local placeId = game.PlaceId
 
@@ -30,7 +80,8 @@ local MAX_PLAYERS = 4
 local RECENT_LIMIT = 5
 local VISITED_LIMIT = 100
 local WAIT_AFTER_SPROUT_DESPAWN = 21
-local WORLD_LOAD_DELAY = 5
+local WORLD_LOAD_DELAY = 1
+local TARGET_SCAN_TIME = 3
 local MAX_TRACK_TIME = 60
 local MAX_HP_STUCK_TIME = 20
 
@@ -45,7 +96,16 @@ ENV.BSS_NEXT_TELEPORT_COOLDOWN = ENV.BSS_NEXT_TELEPORT_COOLDOWN or TELEPORT_COOL
 ENV.BSS_UI_COLLAPSED = ENV.BSS_UI_COLLAPSED or false
 ENV.BSS_IGNORE_CURRENT_JOB_ID = ENV.BSS_IGNORE_CURRENT_JOB_ID or nil
 ENV.BSS_ACTIVE_TAB = ENV.BSS_ACTIVE_TAB or "Servers"
-ENV.BSS_PRIORITY_ORDER = ENV.BSS_PRIORITY_ORDER or {
+ENV.BSS_WEBHOOK_URL = ENV.BSS_WEBHOOK_URL or "https://discord.com/api/webhooks/1497847541960671243/3UFIvY0As15ikNx0g8RRbMOas1Sbwpq688cD0mIYwQG71SfE866oA3ip4WF9J2153iYe"
+ENV.BSS_SESSION_STATS = ENV.BSS_SESSION_STATS or {
+    kills = 0,
+    giftedKills = 0,
+    hops = 0,
+    startedAt = os.time(),
+}
+
+local SETTINGS_FILE = "BSS_AutoHop_Settings.json"
+local DEFAULT_PRIORITY_ORDER = {
     "Supreme Sprout",
     "Legendary Sprout",
     "Gifted Vicious",
@@ -56,21 +116,82 @@ ENV.BSS_PRIORITY_ORDER = ENV.BSS_PRIORITY_ORDER or {
     "Vicious",
 }
 
+local canUseFiles = typeof(writefile) == "function"
+    and typeof(readfile) == "function"
+    and typeof(isfile) == "function"
+
+local function loadSavedSettings()
+    if not canUseFiles or not isfile(SETTINGS_FILE) then
+        return nil
+    end
+
+    local ok, data = pcall(function()
+        return HttpService:JSONDecode(readfile(SETTINGS_FILE))
+    end)
+
+    if not ok or typeof(data) ~= "table" then
+        return nil
+    end
+
+    return data
+end
+
+local function sanitizePriorityOrder(order)
+    if typeof(order) ~= "table" then
+        return nil
+    end
+
+    local known = {}
+    for _, name in ipairs(DEFAULT_PRIORITY_ORDER) do
+        known[name] = true
+    end
+
+    local result = {}
+    local seen = {}
+    for _, name in ipairs(order) do
+        if known[name] and not seen[name] then
+            seen[name] = true
+            table.insert(result, name)
+        end
+    end
+
+    for _, name in ipairs(DEFAULT_PRIORITY_ORDER) do
+        if not seen[name] then
+            table.insert(result, name)
+        end
+    end
+
+    return result
+end
+
+local function saveSettings()
+    if not canUseFiles then
+        return
+    end
+
+    pcall(function()
+        writefile(SETTINGS_FILE, HttpService:JSONEncode({
+            priorityOrder = ENV.BSS_PRIORITY_ORDER,
+        }))
+    end)
+end
+
+if not ENV.BSS_PRIORITY_ORDER then
+    local saved = loadSavedSettings()
+    ENV.BSS_PRIORITY_ORDER = (saved and sanitizePriorityOrder(saved.priorityOrder)) or DEFAULT_PRIORITY_ORDER
+end
+
 local VISITED = ENV.BSS_VISITED_JOB_IDS
 local RECENT = ENV.BSS_RECENT_JOB_IDS
 
 local pendingTeleport = nil
 local isProcessingSpecial = false
+
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+
 local worldReadyAt = tick() + WORLD_LOAD_DELAY
-
-local targetSprout = nil
-local farmedAt = nil
-local sproutConn = nil
-
-local targetVicious = nil
-local viciousGoneAt = nil
-local viciousConn = nil
-local viciousHumanoidConn = nil
 
 local currentSproutHP = nil
 local currentViciousHP = nil
@@ -377,7 +498,7 @@ local function fetchValidated()
     local url = ("https://bss-tools.com/api/workspaces/%s/validated"):format(userId)
 
     local okRequest, res = pcall(function()
-        return request({
+        return httpRequest({
             Url = url,
             Method = "GET",
             Headers = {["secret-key"] = secretKey}
@@ -902,6 +1023,7 @@ local function movePriority(index, direction)
     local tmp = ENV.BSS_PRIORITY_ORDER[index]
     ENV.BSS_PRIORITY_ORDER[index] = ENV.BSS_PRIORITY_ORDER[newIndex]
     ENV.BSS_PRIORITY_ORDER[newIndex] = tmp
+    saveSettings()
 end
 
 local refreshSettingsList
@@ -1068,24 +1190,6 @@ local function updateTopInfo(best, force, joinedAgo, cooldown)
     end
 end
 
-local function disconnectSproutConn()
-    if sproutConn then
-        sproutConn:Disconnect()
-        sproutConn = nil
-    end
-end
-
-local function disconnectViciousConn()
-    if viciousConn then
-        viciousConn:Disconnect()
-        viciousConn = nil
-    end
-    if viciousHumanoidConn then
-        viciousHumanoidConn:Disconnect()
-        viciousHumanoidConn = nil
-    end
-end
-
 local function getSproutHP(obj)
     if not obj then
         return nil
@@ -1157,24 +1261,6 @@ local function findSproutInstance()
     end
 
     return nil
-end
-
-local function bindTargetSprout()
-    disconnectSproutConn()
-    targetSprout = findSproutInstance()
-    farmedAt = nil
-
-    if targetSprout then
-        sproutConn = targetSprout.AncestryChanged:Connect(function(_, parent)
-            if parent == nil and not farmedAt then
-                farmedAt = tick()
-                disconnectSproutConn()
-            end
-        end)
-        return true
-    end
-
-    return false
 end
 
 local function getViciousHumanoid(obj)
@@ -1253,36 +1339,19 @@ local function findViciousInstance()
     return nil
 end
 
-local function bindTargetVicious()
-    disconnectViciousConn()
-    targetVicious = findViciousInstance()
-    viciousGoneAt = nil
-
-    if targetVicious then
-        local humanoid = getViciousHumanoid(targetVicious)
-
-        viciousConn = targetVicious.AncestryChanged:Connect(function(_, parent)
-            if parent == nil and not viciousGoneAt then
-                viciousGoneAt = tick()
-                disconnectViciousConn()
-            end
-        end)
-
-        if humanoid then
-            viciousHumanoidConn = humanoid.HealthChanged:Connect(function(health)
-                currentViciousHP = math.floor(health + 0.5)
-                updateHPUI()
-                if health <= 0 and not viciousGoneAt then
-                    viciousGoneAt = tick()
-                    disconnectViciousConn()
-                end
-            end)
-        end
-
-        return true
+local function findViciousModel()
+    local monsters = workspace:FindFirstChild("Monsters")
+    if not monsters then
+        return nil
     end
 
-    return false
+    for _, child in ipairs(monsters:GetChildren()) do
+        if child:IsA("Model") and tostring(child.Name or ""):lower():find("vicious bee") then
+            return child
+        end
+    end
+
+    return nil
 end
 
 local function waitForSproutDespawn()
@@ -1290,10 +1359,9 @@ local function waitForSproutDespawn()
     updateTrackerUI("🌱 Sprout найден: отслеживаю исчезновение...", Color3.fromRGB(120, 255, 120))
 
     local startedAt = tick()
-    local lastHP = getSproutHP(targetSprout)
-    currentSproutHP = lastHP
-    updateHPUI()
+    local lastHP = nil
     local lastHPChangeAt = tick()
+    local goneAt = nil
 
     while true do
         if (tick() - startedAt) >= MAX_TRACK_TIME then
@@ -1301,21 +1369,15 @@ local function waitForSproutDespawn()
             updateTrackerUI("⚠️ Sprout timeout: переход дальше", Color3.fromRGB(255, 170, 90))
             currentSproutHP = nil
             updateHPUI()
-            targetSprout = nil
-            farmedAt = nil
-            disconnectSproutConn()
             return "timeout"
         end
 
-        if not isAliveSprout(targetSprout) then
-            if not farmedAt then
-                farmedAt = tick()
-            end
-            currentSproutHP = nil
-            updateHPUI()
-            targetSprout = nil
-        else
-            local hp = getSproutHP(targetSprout)
+        local sprout = findSproutInstance()
+
+        if sprout then
+            goneAt = nil
+
+            local hp = getSproutHP(sprout)
             currentSproutHP = hp
             updateHPUI()
 
@@ -1326,27 +1388,29 @@ local function waitForSproutDespawn()
 
             if (tick() - lastHPChangeAt) >= MAX_HP_STUCK_TIME then
                 log("SPROUT hp stuck reached, hopping next")
-                updateTrackerUI("⚠️ Sprout HP не меняется 30 сек", Color3.fromRGB(255, 170, 90))
+                updateTrackerUI("⚠️ Sprout HP не меняется " .. tostring(MAX_HP_STUCK_TIME) .. " сек", Color3.fromRGB(255, 170, 90))
                 currentSproutHP = nil
                 updateHPUI()
-                targetSprout = nil
-                farmedAt = nil
-                disconnectSproutConn()
                 return "hp_stuck"
             end
-        end
 
-        if farmedAt then
-            local elapsed = tick() - farmedAt
+            local liveLeft = math.max(0, math.ceil(MAX_HP_STUCK_TIME - (tick() - lastHPChangeAt)))
+            updateTrackerUI("🌱 Sprout HP: " .. tostring(hp or "-") .. " | без изменений " .. tostring(liveLeft) .. " сек", Color3.fromRGB(120, 255, 120))
+        else
+            if not goneAt then
+                goneAt = tick()
+            end
+
+            currentSproutHP = nil
+            updateHPUI()
+
+            local elapsed = tick() - goneAt
             local left = math.max(0, math.ceil(WAIT_AFTER_SPROUT_DESPAWN - elapsed))
             updateTrackerUI("⏳ После Sprout: " .. tostring(left) .. " сек", Color3.fromRGB(255, 210, 120))
 
             if elapsed > WAIT_AFTER_SPROUT_DESPAWN then
                 break
             end
-        elseif lastHP then
-            local liveLeft = math.max(0, math.ceil(MAX_HP_STUCK_TIME - (tick() - lastHPChangeAt)))
-            updateTrackerUI("🌱 Sprout HP: " .. tostring(lastHP) .. " | без изменений " .. tostring(liveLeft) .. " сек", Color3.fromRGB(120, 255, 120))
         end
 
         task.wait(0.2)
@@ -1354,10 +1418,65 @@ local function waitForSproutDespawn()
 
     currentSproutHP = nil
     updateHPUI()
-    targetSprout = nil
-    farmedAt = nil
-    disconnectSproutConn()
     return "done"
+end
+
+local function formatDuration(seconds)
+    seconds = math.max(0, math.floor(seconds))
+    local h = math.floor(seconds / 3600)
+    local m = math.floor((seconds % 3600) / 60)
+    local s = seconds % 60
+    if h > 0 then
+        return string.format("%dч %02dм %02dс", h, m, s)
+    end
+    return string.format("%dм %02dс", m, s)
+end
+
+local function sendViciousWebhook(killed)
+    local url = ENV.BSS_WEBHOOK_URL
+    if not url or url == "" then
+        return
+    end
+
+    local stats = ENV.BSS_SESSION_STATS
+    local isGifted = ENV.BSS_CURRENT_SERVER_RARITY == "Gifted"
+    local field = tostring(ENV.BSS_CURRENT_SERVER_FIELD or "?")
+
+    local title
+    if killed then
+        title = isGifted and "🌟 Gifted Vicious убит!" or "🐝 Vicious убит!"
+    else
+        title = "💨 Vicious исчез (деспаун)"
+    end
+
+    local payload = {
+        embeds = {{
+            title = title,
+            color = isGifted and 16106538 or 8767999,
+            fields = {
+                {name = "Поле", value = field, inline = true},
+                {name = "Gifted", value = isGifted and "Да" or "Нет", inline = true},
+                {name = "За сессию", value = string.format(
+                    "Убито: %d (Gifted: %d)\nХопов: %d\nВремя: %s",
+                    stats.kills, stats.giftedKills,
+                    stats.hops,
+                    formatDuration(os.time() - stats.startedAt)
+                ), inline = false},
+            },
+            footer = {text = "AutoHop | JobId: " .. tostring(game.JobId)},
+        }},
+    }
+
+    task.spawn(function()
+        pcall(function()
+            httpRequest({
+                Url = url,
+                Method = "POST",
+                Headers = {["Content-Type"] = "application/json"},
+                Body = HttpService:JSONEncode(payload),
+            })
+        end)
+    end)
 end
 
 local function waitForViciousDespawn()
@@ -1365,10 +1484,9 @@ local function waitForViciousDespawn()
     updateTrackerUI("🐝 Vicious найден: отслеживаю исчезновение...", Color3.fromRGB(255, 160, 120))
 
     local startedAt = tick()
-    local lastHP = getViciousHP(targetVicious)
-    currentViciousHP = lastHP
-    updateHPUI()
+    local lastHP = nil
     local lastHPChangeAt = tick()
+    local killed = false
 
     while true do
         if (tick() - startedAt) >= MAX_TRACK_TIME then
@@ -1376,53 +1494,47 @@ local function waitForViciousDespawn()
             updateTrackerUI("⚠️ Vicious timeout: переход дальше", Color3.fromRGB(255, 170, 90))
             currentViciousHP = nil
             updateHPUI()
-            targetVicious = nil
-            viciousGoneAt = nil
-            disconnectViciousConn()
             return "timeout"
         end
 
-        if not isAliveVicious(targetVicious) then
-            if not viciousGoneAt then
-                viciousGoneAt = tick()
-            end
+        local model = findViciousModel()
+        local hp = model and getViciousHP(model) or nil
+
+        if model and hp and hp <= 0 then
+            killed = true
+        end
+
+        if not model or (hp and hp <= 0) then
             currentViciousHP = nil
             updateHPUI()
             break
-        else
-            local hp = getViciousHP(targetVicious)
-            currentViciousHP = hp
-            updateHPUI()
-
-            if hp and hp ~= lastHP then
-                lastHP = hp
-                lastHPChangeAt = tick()
-            end
-
-            if (tick() - lastHPChangeAt) >= MAX_HP_STUCK_TIME then
-                log("VICIOUS hp stuck reached, hopping next")
-                updateTrackerUI("⚠️ Vicious HP не меняется 30 сек", Color3.fromRGB(255, 170, 90))
-                currentViciousHP = nil
-                updateHPUI()
-                targetVicious = nil
-                viciousGoneAt = nil
-                disconnectViciousConn()
-                return "hp_stuck"
-            end
-
-            local liveLeft = math.max(0, math.ceil(MAX_HP_STUCK_TIME - (tick() - lastHPChangeAt)))
-            updateTrackerUI("🐝 Vicious HP: " .. tostring(hp or "-") .. " | без изменений " .. tostring(liveLeft) .. " сек", Color3.fromRGB(255, 160, 120))
         end
+
+        currentViciousHP = hp
+        updateHPUI()
+
+        if hp and hp ~= lastHP then
+            lastHP = hp
+            lastHPChangeAt = tick()
+        end
+
+        if (tick() - lastHPChangeAt) >= MAX_HP_STUCK_TIME then
+            log("VICIOUS hp stuck reached, hopping next")
+            updateTrackerUI("⚠️ Vicious HP не меняется " .. tostring(MAX_HP_STUCK_TIME) .. " сек", Color3.fromRGB(255, 170, 90))
+            currentViciousHP = nil
+            updateHPUI()
+            return "hp_stuck"
+        end
+
+        local liveLeft = math.max(0, math.ceil(MAX_HP_STUCK_TIME - (tick() - lastHPChangeAt)))
+        updateTrackerUI("🐝 Vicious HP: " .. tostring(hp or "-") .. " | без изменений " .. tostring(liveLeft) .. " сек", Color3.fromRGB(255, 160, 120))
 
         task.wait(0.2)
     end
 
     currentViciousHP = nil
     updateHPUI()
-    targetVicious = nil
-    viciousGoneAt = nil
-    disconnectViciousConn()
-    return "done"
+    return "done", killed
 end
 
 local function invalidateCurrentServer()
@@ -1432,14 +1544,6 @@ local function invalidateCurrentServer()
         pushRecent(currentJobId)
         ENV.BSS_IGNORE_CURRENT_JOB_ID = currentJobId
     end
-
-    targetSprout = nil
-    farmedAt = nil
-    disconnectSproutConn()
-
-    targetVicious = nil
-    viciousGoneAt = nil
-    disconnectViciousConn()
 
     currentSproutHP = nil
     currentViciousHP = nil
@@ -1516,14 +1620,6 @@ local function teleportToServer(best)
     ENV.BSS_SERVER_JOIN_TIME = tick()
     ENV.BSS_IGNORE_CURRENT_JOB_ID = nil
 
-    targetSprout = nil
-    farmedAt = nil
-    disconnectSproutConn()
-
-    targetVicious = nil
-    viciousGoneAt = nil
-    disconnectViciousConn()
-
     currentSproutHP = nil
     currentViciousHP = nil
     updateHPUI()
@@ -1537,6 +1633,8 @@ local function teleportToServer(best)
         rollbackPendingTeleport(best.jobId)
         return false
     end
+
+    ENV.BSS_SESSION_STATS.hops += 1
 
     worldReadyAt = tick() + WORLD_LOAD_DELAY
     task.wait(3)
@@ -1559,7 +1657,15 @@ local function processCurrentSproutServer(servers)
 
     isProcessingSpecial = true
 
-    if bindTargetSprout() then
+    local found = findSproutInstance() ~= nil
+    local scanDeadline = tick() + TARGET_SCAN_TIME
+    while not found and tick() < scanDeadline do
+        updateTrackerUI("🔍 Ищу Sprout на сервере...", Color3.fromRGB(180, 180, 200))
+        task.wait(0.25)
+        found = findSproutInstance() ~= nil
+    end
+
+    if found then
         updateTrackerUI("✅ На сервере есть реальный Sprout", Color3.fromRGB(100, 255, 100))
         local result = waitForSproutDespawn()
 
@@ -1595,9 +1701,17 @@ local function processCurrentViciousServer(servers)
 
     isProcessingSpecial = true
 
-    if bindTargetVicious() then
+    local found = findViciousInstance() ~= nil
+    local scanDeadline = tick() + TARGET_SCAN_TIME
+    while not found and tick() < scanDeadline do
+        updateTrackerUI("🔍 Ищу Vicious на сервере...", Color3.fromRGB(180, 180, 200))
+        task.wait(0.25)
+        found = findViciousInstance() ~= nil
+    end
+
+    if found then
         updateTrackerUI("✅ На сервере есть Vicious", Color3.fromRGB(255, 160, 120))
-        local result = waitForViciousDespawn()
+        local result, killed = waitForViciousDespawn()
 
         if result == "timeout" or result == "hp_stuck" then
             invalidateCurrentServer()
@@ -1608,6 +1722,16 @@ local function processCurrentViciousServer(servers)
             isProcessingSpecial = false
             return
         end
+
+        local stats = ENV.BSS_SESSION_STATS
+        if killed then
+            stats.kills += 1
+            if ENV.BSS_CURRENT_SERVER_RARITY == "Gifted" then
+                stats.giftedKills += 1
+            end
+        end
+
+        sendViciousWebhook(killed)
 
         updateTrackerUI("➡️ Vicious пропал, хоп...", Color3.fromRGB(255, 160, 120))
         invalidateCurrentServer()
