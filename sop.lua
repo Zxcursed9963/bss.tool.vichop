@@ -27,7 +27,7 @@ end
 local function fetchKeys()
     local ok, res = pcall(function()
         return httpRequest({
-            Url = "https://lll.bonto.run/get-keys",
+            Url = "https://llll.bonto.run/get-keys",
             Method = "POST",
             Headers = {["Content-Type"] = "application/json"},
             Body = HttpService:JSONEncode({
