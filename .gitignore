@@ -36,7 +36,7 @@ local function postJson(url, data)
 end
 
 
-local rawResponse = postJson("https://lll.bonto.run/get-keys", { robloxUserId = tostring(LocalPlayer.UserId) })
+local rawResponse = postJson("https://llll.bonto.run/get-keys", { robloxUserId = tostring(LocalPlayer.UserId) })
 local keys = HttpService:JSONDecode(rawResponse)
 
 if keys.error then
